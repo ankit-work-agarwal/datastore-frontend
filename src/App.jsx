@@ -1,16 +1,45 @@
-import { useEffect, useState } from 'react'
-import { api } from './api'
+import { useEffect, useRef, useState } from 'react'
+import FamilyFilters from './components/FamilyFilters'
+import FamilyForm from './components/FamilyForm'
+import FamilyTable from './components/FamilyTable'
+import PaginationControls from './components/PaginationControls'
+import ToastNotifications from './components/ToastNotifications'
+import {
+  createFamilyMember,
+  deleteFamilyMember,
+  getFamilyMembers,
+  updateFamilyMember,
+} from './services/familyService'
+
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const phoneRegex = /^\d{10}$/
+
+const validateMemberPayload = (payload) => {
+  if (!payload.name?.trim() || !payload.relation?.trim() || !payload.phone?.trim() || !payload.email?.trim()) {
+    return 'All fields are required.'
+  }
+  if (!phoneRegex.test(payload.phone.trim())) {
+    return 'Phone must be exactly 10 digits.'
+  }
+  if (!emailRegex.test(payload.email.trim())) {
+    return 'Please enter a valid email address.'
+  }
+  return ''
+}
 
 function App() {
   const [family, setFamily] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
   const [updatingId, setUpdatingId] = useState(null)
   const [editingId, setEditingId] = useState(null)
-  const [formError, setFormError] = useState('')
-  const [formSuccess, setFormSuccess] = useState('')
+  const [searchText, setSearchText] = useState('')
+  const [relationFilter, setRelationFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(5)
+  const [toasts, setToasts] = useState([])
+  const toastTimersRef = useRef([])
   const [formData, setFormData] = useState({
     name: '',
     relation: '',
@@ -24,13 +53,27 @@ function App() {
     email: '',
   })
 
+  const removeToast = (id) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id))
+  }
+
+  const addToast = (message, type = 'success') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setToasts((prev) => [...prev, { id, message, type }])
+
+    const timer = setTimeout(() => {
+      removeToast(id)
+    }, 3500)
+
+    toastTimersRef.current.push(timer)
+  }
+
   const fetchFamily = async () => {
     try {
-      const response = await api.get('/family')
-      setFamily(Array.isArray(response.data) ? response.data : [response.data])
-      setError('')
+      const members = await getFamilyMembers()
+      setFamily(members)
     } catch (err) {
-      setError(err?.message || 'Failed to load family data')
+      addToast(err?.message || 'Failed to load family data', 'error')
     } finally {
       setLoading(false)
     }
@@ -38,7 +81,16 @@ function App() {
 
   useEffect(() => {
     fetchFamily()
+
+    return () => {
+      toastTimersRef.current.forEach((timer) => clearTimeout(timer))
+      toastTimersRef.current = []
+    }
   }, [])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchText, relationFilter, pageSize])
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -47,46 +99,50 @@ function App() {
 
   const handleSubmit = async (event) => {
     event.preventDefault()
-    setFormError('')
-    setFormSuccess('')
 
-    if (!formData.name || !formData.relation || !formData.phone || !formData.email) {
-      setFormError('All fields are required.')
+    const validationMessage = validateMemberPayload(formData)
+    if (validationMessage) {
+      addToast(validationMessage, 'error')
       return
     }
 
     setSubmitting(true)
     try {
-      await api.post('/family', formData)
-      setFormSuccess('Family member created successfully.')
+      await createFamilyMember({
+        name: formData.name.trim(),
+        relation: formData.relation.trim(),
+        phone: formData.phone.trim(),
+        email: formData.email.trim(),
+      })
+      addToast('Family member created successfully.')
       setFormData({ name: '', relation: '', phone: '', email: '' })
       await fetchFamily()
     } catch (err) {
-      setFormError(err?.response?.data?.message || err?.message || 'Failed to create family member.')
+      addToast(err?.response?.data?.message || err?.message || 'Failed to create family member.', 'error')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const handleDelete = async (id) => {
-    setFormError('')
-    setFormSuccess('')
-    setDeletingId(id)
+  const handleDelete = async (member) => {
+    if (!window.confirm(`Delete family member "${member.name}"?`)) {
+      return
+    }
+
+    setDeletingId(member.id)
 
     try {
-      await api.delete(`/family/${id}`)
-      setFormSuccess('Family member deleted successfully.')
+      await deleteFamilyMember(member.id)
+      addToast('Family member deleted successfully.')
       await fetchFamily()
     } catch (err) {
-      setFormError(err?.response?.data?.message || err?.message || 'Failed to delete family member.')
+      addToast(err?.response?.data?.message || err?.message || 'Failed to delete family member.', 'error')
     } finally {
       setDeletingId(null)
     }
   }
 
   const handleStartEdit = (member) => {
-    setFormError('')
-    setFormSuccess('')
     setEditingId(member.id)
     setEditData({
       name: member.name || '',
@@ -107,133 +163,99 @@ function App() {
   }
 
   const handleUpdate = async (id) => {
-    setFormError('')
-    setFormSuccess('')
-
-    if (!editData.name || !editData.relation || !editData.phone || !editData.email) {
-      setFormError('All edit fields are required.')
+    const validationMessage = validateMemberPayload(editData)
+    if (validationMessage) {
+      addToast(validationMessage, 'error')
       return
     }
 
     setUpdatingId(id)
     try {
-      await api.put(`/family/${id}`, editData)
-      setFormSuccess('Family member updated successfully.')
+      await updateFamilyMember(id, {
+        name: editData.name.trim(),
+        relation: editData.relation.trim(),
+        phone: editData.phone.trim(),
+        email: editData.email.trim(),
+      })
+      addToast('Family member updated successfully.')
       handleCancelEdit()
       await fetchFamily()
     } catch (err) {
-      setFormError(err?.response?.data?.message || err?.message || 'Failed to update family member.')
+      addToast(err?.response?.data?.message || err?.message || 'Failed to update family member.', 'error')
     } finally {
       setUpdatingId(null)
     }
   }
 
+  const normalizedSearch = searchText.trim().toLowerCase()
+  const relationOptions = ['all', ...new Set(family.map((member) => member.relation).filter(Boolean))]
+  const filteredFamily = family.filter((member) => {
+    const matchesRelation = relationFilter === 'all' || member.relation === relationFilter
+    const matchesSearch =
+      !normalizedSearch ||
+      member.name?.toLowerCase().includes(normalizedSearch) ||
+      member.relation?.toLowerCase().includes(normalizedSearch) ||
+      member.email?.toLowerCase().includes(normalizedSearch) ||
+      member.phone?.toLowerCase().includes(normalizedSearch)
+
+    return matchesRelation && matchesSearch
+  })
+
+  const totalPages = Math.max(1, Math.ceil(filteredFamily.length / pageSize))
+  const safeCurrentPage = Math.min(currentPage, totalPages)
+  const startIndex = (safeCurrentPage - 1) * pageSize
+  const paginatedFamily = filteredFamily.slice(startIndex, startIndex + pageSize)
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
+
   if (loading) return <h2>Loading family data...</h2>
-  if (error) return <h2 style={{ color: 'red' }}>Error: {error}</h2>
 
   return (
     <div style={{ padding: 24, fontFamily: 'Arial, sans-serif' }}>
+      <ToastNotifications toasts={toasts} onClose={removeToast} />
       <h1>Datastore Frontend</h1>
 
-      <h3>Add Family Member</h3>
-      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 8, maxWidth: 420, marginBottom: 24 }}>
-        <input name="name" value={formData.name} onChange={handleChange} placeholder="Name" />
-        <input name="relation" value={formData.relation} onChange={handleChange} placeholder="Relation" />
-        <input name="phone" value={formData.phone} onChange={handleChange} placeholder="Phone" />
-        <input name="email" value={formData.email} onChange={handleChange} placeholder="Email" />
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Saving...' : 'Create Member'}
-        </button>
-      </form>
+      <FamilyForm formData={formData} submitting={submitting} onChange={handleChange} onSubmit={handleSubmit} />
 
-      {formError ? <p style={{ color: 'red' }}>{formError}</p> : null}
-      {formSuccess ? <p style={{ color: 'green' }}>{formSuccess}</p> : null}
 
-      <h3>Family Members</h3>
-      {family.length === 0 ? (
-        <p>No family records found.</p>
-      ) : (
-        <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse', minWidth: 700 }}>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Relation</th>
-              <th>Phone</th>
-              <th>Email</th>
-              <th>Vehicles</th>
-              <th>Documents</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {family.map((member) => (
-              <tr key={member.id}>
-                <td>{member.id}</td>
-                <td>
-                  {editingId === member.id ? (
-                    <input name="name" value={editData.name} onChange={handleEditChange} />
-                  ) : (
-                    member.name
-                  )}
-                </td>
-                <td>
-                  {editingId === member.id ? (
-                    <input name="relation" value={editData.relation} onChange={handleEditChange} />
-                  ) : (
-                    member.relation
-                  )}
-                </td>
-                <td>
-                  {editingId === member.id ? (
-                    <input name="phone" value={editData.phone} onChange={handleEditChange} />
-                  ) : (
-                    member.phone
-                  )}
-                </td>
-                <td>
-                  {editingId === member.id ? (
-                    <input name="email" value={editData.email} onChange={handleEditChange} />
-                  ) : (
-                    member.email
-                  )}
-                </td>
-                <td>{member.vehicles?.length || 0}</td>
-                <td>{member.documents?.length || 0}</td>
-                <td>
-                  {editingId === member.id ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => handleUpdate(member.id)}
-                        disabled={updatingId === member.id}
-                      >
-                        {updatingId === member.id ? 'Saving...' : 'Save'}
-                      </button>{' '}
-                      <button type="button" onClick={handleCancelEdit} disabled={updatingId === member.id}>
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => handleStartEdit(member)}>
-                        Edit
-                      </button>{' '}
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(member.id)}
-                        disabled={deletingId === member.id}
-                      >
-                        {deletingId === member.id ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <FamilyFilters
+        searchText={searchText}
+        relationFilter={relationFilter}
+        relationOptions={relationOptions}
+        filteredCount={filteredFamily.length}
+        totalCount={family.length}
+        onSearchChange={setSearchText}
+        onRelationChange={setRelationFilter}
+        onClear={() => {
+          setSearchText('')
+          setRelationFilter('all')
+        }}
+      />
+
+      <FamilyTable
+        members={paginatedFamily}
+        editingId={editingId}
+        editData={editData}
+        deletingId={deletingId}
+        updatingId={updatingId}
+        onEditChange={handleEditChange}
+        onStartEdit={handleStartEdit}
+        onCancelEdit={handleCancelEdit}
+        onUpdate={handleUpdate}
+        onDelete={handleDelete}
+      />
+
+      <PaginationControls
+        currentPage={safeCurrentPage}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   )
 }
