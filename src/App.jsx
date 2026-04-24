@@ -1,261 +1,48 @@
-import { useEffect, useRef, useState } from 'react'
-import FamilyFilters from './components/FamilyFilters'
-import FamilyForm from './components/FamilyForm'
-import FamilyTable from './components/FamilyTable'
-import PaginationControls from './components/PaginationControls'
-import ToastNotifications from './components/ToastNotifications'
-import {
-  createFamilyMember,
-  deleteFamilyMember,
-  getFamilyMembers,
-  updateFamilyMember,
-} from './services/familyService'
-
-const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const phoneRegex = /^\d{10}$/
-
-const validateMemberPayload = (payload) => {
-  if (!payload.name?.trim() || !payload.relation?.trim() || !payload.phone?.trim() || !payload.email?.trim()) {
-    return 'All fields are required.'
-  }
-  if (!phoneRegex.test(payload.phone.trim())) {
-    return 'Phone must be exactly 10 digits.'
-  }
-  if (!emailRegex.test(payload.email.trim())) {
-    return 'Please enter a valid email address.'
-  }
-  return ''
-}
+import { NavLink, Route, Routes } from 'react-router-dom'
+import GenericCrudPage from './components/GenericCrudPage'
+import { moduleConfigs } from './config/modules'
+import DashboardPage from './pages/DashboardPage'
+import FamilyPage from './pages/FamilyPage'
 
 function App() {
-  const [family, setFamily] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [submitting, setSubmitting] = useState(false)
-  const [deletingId, setDeletingId] = useState(null)
-  const [updatingId, setUpdatingId] = useState(null)
-  const [editingId, setEditingId] = useState(null)
-  const [searchText, setSearchText] = useState('')
-  const [relationFilter, setRelationFilter] = useState('all')
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(5)
-  const [toasts, setToasts] = useState([])
-  const toastTimersRef = useRef([])
-  const [formData, setFormData] = useState({
-    name: '',
-    relation: '',
-    phone: '',
-    email: '',
-  })
-  const [editData, setEditData] = useState({
-    name: '',
-    relation: '',
-    phone: '',
-    email: '',
-  })
-
-  const removeToast = (id) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id))
-  }
-
-  const addToast = (message, type = 'success') => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    setToasts((prev) => [...prev, { id, message, type }])
-
-    const timer = setTimeout(() => {
-      removeToast(id)
-    }, 3500)
-
-    toastTimersRef.current.push(timer)
-  }
-
-  const fetchFamily = async () => {
-    try {
-      const members = await getFamilyMembers()
-      setFamily(members)
-    } catch (err) {
-      addToast(err?.message || 'Failed to load family data', 'error')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    fetchFamily()
-
-    return () => {
-      toastTimersRef.current.forEach((timer) => clearTimeout(timer))
-      toastTimersRef.current = []
-    }
-  }, [])
-
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [searchText, relationFilter, pageSize])
-
-  const handleChange = (event) => {
-    const { name, value } = event.target
-    setFormData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleSubmit = async (event) => {
-    event.preventDefault()
-
-    const validationMessage = validateMemberPayload(formData)
-    if (validationMessage) {
-      addToast(validationMessage, 'error')
-      return
-    }
-
-    setSubmitting(true)
-    try {
-      await createFamilyMember({
-        name: formData.name.trim(),
-        relation: formData.relation.trim(),
-        phone: formData.phone.trim(),
-        email: formData.email.trim(),
-      })
-      addToast('Family member created successfully.')
-      setFormData({ name: '', relation: '', phone: '', email: '' })
-      await fetchFamily()
-    } catch (err) {
-      addToast(err?.response?.data?.message || err?.message || 'Failed to create family member.', 'error')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const handleDelete = async (member) => {
-    if (!window.confirm(`Delete family member "${member.name}"?`)) {
-      return
-    }
-
-    setDeletingId(member.id)
-
-    try {
-      await deleteFamilyMember(member.id)
-      addToast('Family member deleted successfully.')
-      await fetchFamily()
-    } catch (err) {
-      addToast(err?.response?.data?.message || err?.message || 'Failed to delete family member.', 'error')
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
-  const handleStartEdit = (member) => {
-    setEditingId(member.id)
-    setEditData({
-      name: member.name || '',
-      relation: member.relation || '',
-      phone: member.phone || '',
-      email: member.email || '',
-    })
-  }
-
-  const handleCancelEdit = () => {
-    setEditingId(null)
-    setEditData({ name: '', relation: '', phone: '', email: '' })
-  }
-
-  const handleEditChange = (event) => {
-    const { name, value } = event.target
-    setEditData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleUpdate = async (id) => {
-    const validationMessage = validateMemberPayload(editData)
-    if (validationMessage) {
-      addToast(validationMessage, 'error')
-      return
-    }
-
-    setUpdatingId(id)
-    try {
-      await updateFamilyMember(id, {
-        name: editData.name.trim(),
-        relation: editData.relation.trim(),
-        phone: editData.phone.trim(),
-        email: editData.email.trim(),
-      })
-      addToast('Family member updated successfully.')
-      handleCancelEdit()
-      await fetchFamily()
-    } catch (err) {
-      addToast(err?.response?.data?.message || err?.message || 'Failed to update family member.', 'error')
-    } finally {
-      setUpdatingId(null)
-    }
-  }
-
-  const normalizedSearch = searchText.trim().toLowerCase()
-  const relationOptions = ['all', ...new Set(family.map((member) => member.relation).filter(Boolean))]
-  const filteredFamily = family.filter((member) => {
-    const matchesRelation = relationFilter === 'all' || member.relation === relationFilter
-    const matchesSearch =
-      !normalizedSearch ||
-      member.name?.toLowerCase().includes(normalizedSearch) ||
-      member.relation?.toLowerCase().includes(normalizedSearch) ||
-      member.email?.toLowerCase().includes(normalizedSearch) ||
-      member.phone?.toLowerCase().includes(normalizedSearch)
-
-    return matchesRelation && matchesSearch
-  })
-
-  const totalPages = Math.max(1, Math.ceil(filteredFamily.length / pageSize))
-  const safeCurrentPage = Math.min(currentPage, totalPages)
-  const startIndex = (safeCurrentPage - 1) * pageSize
-  const paginatedFamily = filteredFamily.slice(startIndex, startIndex + pageSize)
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages)
-    }
-  }, [currentPage, totalPages])
-
-  if (loading) return <h2>Loading family data...</h2>
-
   return (
-    <div style={{ padding: 24, fontFamily: 'Arial, sans-serif' }}>
-      <ToastNotifications toasts={toasts} onClose={removeToast} />
-      <h1>Datastore Frontend</h1>
+    <div style={{ fontFamily: 'Arial, sans-serif' }}>
+      <header style={{ padding: 16, borderBottom: '1px solid #e5e7eb', backgroundColor: '#f8fafc' }}>
+        <h1 style={{ margin: '0 0 12px' }}>Datastore</h1>
+        <nav style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          <NavLink to="/">Dashboard</NavLink>
+          {moduleConfigs.map((module) => (
+            <NavLink key={module.path} to={module.path}>
+              {module.label}
+            </NavLink>
+          ))}
+        </nav>
+      </header>
 
-      <FamilyForm formData={formData} submitting={submitting} onChange={handleChange} onSubmit={handleSubmit} />
-
-
-      <FamilyFilters
-        searchText={searchText}
-        relationFilter={relationFilter}
-        relationOptions={relationOptions}
-        filteredCount={filteredFamily.length}
-        totalCount={family.length}
-        onSearchChange={setSearchText}
-        onRelationChange={setRelationFilter}
-        onClear={() => {
-          setSearchText('')
-          setRelationFilter('all')
-        }}
-      />
-
-      <FamilyTable
-        members={paginatedFamily}
-        editingId={editingId}
-        editData={editData}
-        deletingId={deletingId}
-        updatingId={updatingId}
-        onEditChange={handleEditChange}
-        onStartEdit={handleStartEdit}
-        onCancelEdit={handleCancelEdit}
-        onUpdate={handleUpdate}
-        onDelete={handleDelete}
-      />
-
-      <PaginationControls
-        currentPage={safeCurrentPage}
-        totalPages={totalPages}
-        pageSize={pageSize}
-        onPageChange={setCurrentPage}
-        onPageSizeChange={setPageSize}
-      />
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        {moduleConfigs.map((module) =>
+          module.implemented ? (
+            <Route key={module.path} path={module.path} element={<FamilyPage />} />
+          ) : (
+            <Route
+              key={module.path}
+              path={module.path}
+              element={
+                <GenericCrudPage
+                  title={module.label}
+                  apiPath={module.apiPath}
+                  tableColumns={module.tableColumns || []}
+                  formFields={module.formFields || []}
+                  familyMemberField={module.familyMemberField}
+                  searchKeys={module.searchKeys || []}
+                  uploadOnly={module.uploadOnly || false}
+                />
+              }
+            />
+          ),
+        )}
+      </Routes>
     </div>
   )
 }
